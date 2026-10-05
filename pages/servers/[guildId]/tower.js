@@ -1,0 +1,36 @@
+import {useEffect,useMemo,useState} from 'react';
+import {getSession} from '../../../lib/session';
+import {fetchUserGuilds} from '../../../lib/discord';
+
+export async function getServerSideProps({req,params}){
+ const session=await getSession(req); if(!session)return{redirect:{destination:'/',permanent:false}};
+ const guilds=await fetchUserGuilds(session.accessToken); const g=guilds.find(x=>x.id===params.guildId);
+ if(!g)return{redirect:{destination:'/servers',permanent:false}};
+ const p=BigInt(g.permissions||'0'); if((p&0x8n)!==0x8n&&(p&0x20n)!==0x20n&&!g.owner)return{redirect:{destination:'/servers',permanent:false}};
+ return{props:{guildId:params.guildId,guildName:g.name}};
+}
+
+function Field({label,value,onChange,type='text'}){return <label className="form-row"><span>{label}</span><input type={type} value={value??''} onChange={e=>onChange(type==='number'?Number(e.target.value):e.target.value)}/></label>}
+export default function TowerDashboard({guildId,guildName}){
+ const [data,setData]=useState(null),[tab,setTab]=useState('general'),[status,setStatus]=useState(''),[busy,setBusy]=useState(false),[pointUser,setPointUser]=useState(''),[pointAmount,setPointAmount]=useState('0.5');
+ const load=async()=>{setStatus('جاري التحميل...');const r=await fetch(`/api/tower/${guildId}`);const j=await r.json();if(!r.ok)throw Error(j.error);setData(j);setStatus('');};
+ useEffect(()=>{load().catch(e=>setStatus(e.message));},[guildId]);
+ const cfg=data?.config||{}; const [draft,setDraft]=useState({}); useEffect(()=>{if(data)setDraft({...data.config});},[data]);
+ const save=async(path,body)=>{setBusy(true);setStatus('جاري الحفظ...');try{const r=await fetch(`/api/tower/${guildId}/${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();if(!r.ok)throw Error(j.error);await load();setStatus('تم الحفظ بنجاح ✅');}catch(e){setStatus(e.message)}finally{setBusy(false)}};
+ const updateRole=(i,k,v)=>{const roles=[...(data.management.roles||[])];roles[i]={...roles[i],[k]:k==='price'?v:Number(v)};setData({...data,management:{...data.management,roles}})};
+ const move=(i,d)=>{const roles=[...(data.management.roles||[])];const j=i+d;if(j<0||j>=roles.length)return;[roles[i],roles[j]]=[roles[j],roles[i]];setData({...data,management:{...data.management,roles}})};
+ const toggleRole=(role)=>{const roles=[...(data.management.roles||[])];const i=roles.findIndex(x=>x.roleId===role.id);if(i>=0)roles.splice(i,1);else roles.push({roleId:role.id,name:role.name,price:0});setData({...data,management:{...data.management,roles}})};
+ if(!data)return <div className="shell"><p>{status||'تحميل...'}</p></div>;
+ const selected=new Set(data.management.roles.map(r=>r.roleId));
+ return <div className="shell">
+  <a href="/servers" className="back-link">← كل السيرفرات</a><h1>{guildName}</h1><p className="lede">لوحة تحكم سيستم البوابين — كل التعديلات تتطبق على البوت مباشرة.</p>
+  <div className="guild-layout"><nav className="guild-sidebar">{[['general','⚙️ الإعدادات'],['management','👑 الإدارة والبوينتات'],['shop','🛒 المتجر'],['security','🛡️ الحماية']].map(([k,t])=><button key={k} className={`tab ${tab===k?'active':''}`} onClick={()=>setTab(k)}>{t}</button>)}</nav>
+  <main className="guild-content">
+   {status&&<div className="banner">{status}</div>}
+   {tab==='general'&&<section><h2>إعدادات الاقتصاد</h2><Field label="اسم العملة" value={draft.coinName} onChange={v=>setDraft({...draft,coinName:v})}/><Field label="رمز العملة" value={draft.coinSymbol} onChange={v=>setDraft({...draft,coinSymbol:v})}/><Field label="عدد الشقق" type="number" value={draft.apartmentCount} onChange={v=>setDraft({...draft,apartmentCount:v})}/><Field label="إعادات اختيار الشقة" type="number" value={draft.rerollsPerUser} onChange={v=>setDraft({...draft,rerollsPerUser:v})}/><Field label="حد العملات اليومي" type="number" value={draft.dailyCoinCap} onChange={v=>setDraft({...draft,dailyCoinCap:v})}/><button className="btn glow" disabled={busy} onClick={()=>save('settings',draft)}>حفظ الإعدادات</button></section>}
+   {tab==='management'&&<section><h2>رتب الإدارة والبوينتات</h2><p>الرتبة <code>1556486551720951878</code> هي رتبة صلاحية الإدارة العامة فقط.</p><h3>اختيار الرتب</h3><div className="server-grid">{data.roles.filter(r=>r.id!== '1556486551720951878').map(r=><button key={r.id} className={`server-card ${selected.has(r.id)?'active':''}`} onClick={()=>toggleRole(r)}><div className="name">{r.name}</div><small>{r.id}</small></button>)}</div><h3>الترتيب والأسعار</h3>{data.management.roles.map((r,i)=><div key={r.roleId} className="form-row"><span><b>{i+1}. {r.name}</b></span><input type="number" step="0.001" min="0" value={r.price} onChange={e=>updateRole(i,'price',e.target.value)}/><button onClick={()=>move(i,-1)}>↑</button><button onClick={()=>move(i,1)}>↓</button></div>)}<label className="form-row"><span>روم النشر</span><select value={data.management.channelId||''} onChange={e=>setData({...data,management:{...data.management,channelId:e.target.value}})}><option value="">اختر روم</option>{data.channels.map(c=><option key={c.id} value={c.id}>#{c.name}</option>)}</select></label><div className="hero-actions"><button className="btn glow" onClick={()=>save('management',{action:'save',roles:data.management.roles,channelId:data.management.channelId})}>حفظ الرتب</button><button className="btn secondary" onClick={()=>save('management',{action:'publish',channelId:data.management.channelId})}>📤 إرسال</button></div><hr/><h3>إضافة بوينتات</h3><Field label="Discord User ID" value={pointUser} onChange={setPointUser}/><Field label="عدد البوينتات" type="number" value={pointAmount} onChange={setPointAmount}/><button className="btn glow" onClick={()=>save('management',{action:'addPoints',userId:pointUser,amount:pointAmount})}>إضافة البوينتات</button></section>}
+   {tab==='shop'&&<Shop data={data} guildId={guildId} reload={load} save={save}/>} 
+   {tab==='security'&&<section><h2>AI والحماية</h2><p>إعدادات AI السرية تظل على Pella. من هنا نتحكم في تشغيل النظام فقط.</p><button className="btn glow" onClick={()=>save('settings',{imageModerationEnabled:true})}>تفعيل فحص الصور</button><button className="btn secondary" onClick={()=>save('settings',{imageModerationEnabled:false})}>إيقاف فحص الصور</button></section>}
+  </main></div></div>
+}
+function Shop({data,save,reload}){const [f,setF]=useState({name:'',priceCoins:0,type:'ROLE',roleId:'',durationDays:'',description:'',enabled:true});const up=()=>save('shop',{action:'upsert',...f}).then(reload);return <section><h2>المتجر</h2><div className="card"><Field label="اسم العنصر" value={f.name} onChange={v=>setF({...f,name:v})}/><Field label="السعر" type="number" value={f.priceCoins} onChange={v=>setF({...f,priceCoins:v})}/><Field label="Role ID" value={f.roleId} onChange={v=>setF({...f,roleId:v})}/><Field label="المدة بالأيام" type="number" value={f.durationDays} onChange={v=>setF({...f,durationDays:v})}/><Field label="الوصف" value={f.description} onChange={v=>setF({...f,description:v})}/><button className="btn glow" onClick={up}>إضافة للمتجر</button></div>{data.shop.map(x=><div className="form-row" key={x.id}><span>{x.name} — {x.priceCoins} 🪙</span><span>{x.enabled?'مفعل':'متوقف'}</span></div>)}</section>}
