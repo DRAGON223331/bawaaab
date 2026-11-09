@@ -942,15 +942,21 @@ let online=false,myId=-1,ws=null,roomCode='',mySeat=-1,myToken='',hostSeat=0,olC
 const OL_KEY='bankElHazOL';
 const olEl=id=>document.getElementById(id);
 function olMsg(t){olEl('olMsg').textContent=t||'';}
-function serverUrl(){const v=(olEl('olServer').value||'').trim();if(v)return v.replace(/^http/i,'ws').replace(/\/+$/,'');if(location.protocol.startsWith('http'))return (location.protocol==='https:'?'wss://':'ws://')+location.host;return '';}
+const STATIC_HOST=/(vercel\.app|netlify\.app|github\.io|pages\.dev)$/.test(location.hostname);
+function serverUrl(){let v=(olEl('olServer').value||'').trim();if(v){if(!/^(https?|wss?):\/\//i.test(v))v='https://'+v;return v.replace(/^http/i,'ws').replace(/^(wss?:\/\/[^\/]+).*$/,'$1');}if(location.protocol.startsWith('http')&&!STATIC_HOST)return (location.protocol==='https:'?'wss://':'ws://')+location.host;return '';}
 function olSend(m){if(ws&&ws.readyState===1)ws.send(JSON.stringify(m));}
-function olConnect(onOpen){
- const url=serverUrl();if(!url){olMsg('اكتب عنوان السيرفر أولًا (الصفحة مفتوحة كملف).');return;}
+let olTries=0;
+function olConnect(onOpen,isRetry){
+ const url=serverUrl();if(!url){olMsg('الصفحة دي مستضافة على موقع ثابت بدون سيرفر لعب. اكتب عنوان سيرفر Node شغّال (مثل Render) في خانة «عنوان السيرفر».');return;}
  try{ws=new WebSocket(url);}catch(e){olMsg('عنوان السيرفر غير صالح.');return;}
  olMsg('جاري الاتصال…');
- ws.onopen=()=>{olMsg('');clearInterval(olPing);olPing=setInterval(()=>olSend({t:'ping'}),25000);onOpen&&onOpen();};
+ let opened=false;
+ ws.onopen=()=>{opened=true;olTries=0;olMsg('');clearInterval(olPing);olPing=setInterval(()=>olSend({t:'ping'}),25000);onOpen&&onOpen();};
  ws.onmessage=e=>{let m;try{m=JSON.parse(e.data);}catch{return;}olHandle(m);};
- ws.onclose=()=>{clearInterval(olPing);if(olLeaving)return;if(roomCode&&myToken){showToast('انقطع الاتصال… بنحاول نرجّعك');clearTimeout(olRetry);olRetry=setTimeout(()=>olConnect(()=>olSend({t:'rejoin',code:roomCode,token:myToken})),2000);}else olMsg('تعذّر الاتصال بالسيرفر.');};
+ ws.onclose=()=>{clearInterval(olPing);if(olLeaving)return;
+  if(!opened&&!isRetry){roomCode='';myToken='';try{sessionStorage.removeItem(OL_KEY);}catch(e){}olMsg('تعذّر الاتصال بالسيرفر. تأكد إن العنوان لسيرفر Node شغّال (مثل Render)، مش Vercel.');return;}
+  if(roomCode&&myToken&&olTries++<8){showToast('انقطع الاتصال… بنحاول نرجّعك');clearTimeout(olRetry);olRetry=setTimeout(()=>olConnect(()=>olSend({t:'rejoin',code:roomCode,token:myToken}),true),2000);}
+  else showToast('انقطع الاتصال نهائيًا. حدّث الصفحة وحاول تاني.');};
  ws.onerror=()=>{};
 }
 function olHandle(m){
@@ -1024,7 +1030,7 @@ olEl('olJoin').addEventListener('click',()=>{const code=(olEl('olCode').value||'
 olEl('olStart').addEventListener('click',()=>olSend({t:'start'}));
 olEl('olCopy').addEventListener('click',()=>{const l=inviteLink();(navigator.clipboard?navigator.clipboard.writeText(l):Promise.reject()).then(()=>showToast('تم نسخ رابط الدعوة'),()=>prompt('انسخ الرابط:',l));});
 olEl('olLeave').addEventListener('click',()=>{olLeaving=true;try{sessionStorage.removeItem(OL_KEY);}catch(e){}if(ws)ws.close();location.href=location.pathname;});
-olEl('olServerRow').classList.toggle('hidden',!(location.protocol==='file:'||/(vercel\.app|netlify\.app|github\.io|pages\.dev)$/.test(location.hostname)));
+olEl('olServerRow').classList.toggle('hidden',!(location.protocol==='file:'||STATIC_HOST));
 (function(){const q=new URLSearchParams(location.search).get('room');if(q){olEl('onlinePanel').classList.remove('hidden');olEl('olCode').value=q.toUpperCase();}
  try{const s=JSON.parse(sessionStorage.getItem(OL_KEY)||'null');if(s&&s.code){roomCode=s.code;myToken=s.token;if(s.url)olEl('olServer').value=s.url;olEl('onlinePanel').classList.remove('hidden');olConnect(()=>olSend({t:'rejoin',code:s.code,token:s.token}));}}catch(e){}})();
 
