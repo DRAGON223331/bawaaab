@@ -1024,7 +1024,7 @@ olEl('olJoin').addEventListener('click',()=>{const code=(olEl('olCode').value||'
 olEl('olStart').addEventListener('click',()=>olSend({t:'start'}));
 olEl('olCopy').addEventListener('click',()=>{const l=inviteLink();(navigator.clipboard?navigator.clipboard.writeText(l):Promise.reject()).then(()=>showToast('تم نسخ رابط الدعوة'),()=>prompt('انسخ الرابط:',l));});
 olEl('olLeave').addEventListener('click',()=>{olLeaving=true;try{sessionStorage.removeItem(OL_KEY);}catch(e){}if(ws)ws.close();location.href=location.pathname;});
-olEl('olServerRow').classList.toggle('hidden',location.protocol.startsWith('http'));
+olEl('olServerRow').classList.toggle('hidden',!(location.protocol==='file:'||/(vercel\.app|netlify\.app|github\.io|pages\.dev)$/.test(location.hostname)));
 (function(){const q=new URLSearchParams(location.search).get('room');if(q){olEl('onlinePanel').classList.remove('hidden');olEl('olCode').value=q.toUpperCase();}
  try{const s=JSON.parse(sessionStorage.getItem(OL_KEY)||'null');if(s&&s.code){roomCode=s.code;myToken=s.token;if(s.url)olEl('olServer').value=s.url;olEl('onlinePanel').classList.remove('hidden');olConnect(()=>olSend({t:'rejoin',code:s.code,token:s.token}));}}catch(e){}})();
 
