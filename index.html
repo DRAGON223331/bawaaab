@@ -1017,7 +1017,7 @@ function p2pHost(tries){
  peer=new Peer('bankhaz-'+code);
  peer.on('open',()=>{
   p2pHostMode=true;selfWs={send:m=>{const c=JSON.parse(JSON.stringify(m));setTimeout(()=>olHandle(c),0);}};
-  Hub.init(code);Hub.handle(selfWs,{t:'create',...olProfile()});olMsg('');
+  Hub.init(code);Hub.handle(selfWs,{t:'create',...olProfile()});olMsg('');keepAwake();
  });
  peer.on('connection',c=>{
   const g={send:m=>{if(c.open)c.send(JSON.stringify(m));}};
@@ -1027,15 +1027,18 @@ function p2pHost(tries){
  peer.on('error',e=>{if(e.type==='unavailable-id'&&tries<5){p2pHost(tries+1);}else if(!p2pHostMode)olMsg('تعذّر إنشاء الغرفة ('+e.type+'). تأكد من اتصال الإنترنت وجرّب تاني.');});
  peer.on('disconnected',()=>{try{peer.reconnect();}catch(e){}});
 }
+let wl=null;
+async function keepAwake(){try{if('wakeLock' in navigator)wl=await navigator.wakeLock.request('screen');}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)return;if(p2pHostMode||p2pConn)keepAwake();if(peer&&peer.disconnected&&!peer.destroyed){try{peer.reconnect();}catch(e){}}});
 function p2pRetry(code){if(roomCode&&myToken&&olTries++<8){showToast('انقطع الاتصال… بنحاول نرجّعك');clearTimeout(olRetry);olRetry=setTimeout(()=>p2pJoin(code,true),2500);}else showToast('انقطع الاتصال بصاحب الغرفة. لازم يفضل فاتح الصفحة. حدّث الصفحة وحاول تاني.');}
-function p2pJoin(code,rejoin){
+function p2pJoin(code,rejoin,att){att=att||0;
  olMsg(rejoin?'':'جاري الاتصال بالغرفة…');
  if(peer){try{peer.destroy();}catch(e){}}p2pConn=null;
  peer=new Peer();
  peer.on('open',()=>{
   const conn=peer.connect('bankhaz-'+code,{reliable:true});p2pConn=conn;
-  const to=setTimeout(()=>{if(!conn.open){olMsg('مفيش رد من الغرفة. راجع الكود وتأكد إن صاحبها فاتح الصفحة.');if(rejoin)p2pRetry(code);}},12000);
-  conn.on('open',()=>{clearTimeout(to);olTries=0;olMsg('');olSend(rejoin?{t:'rejoin',code,token:myToken}:{t:'join',code,...olProfile()});});
+  const to=setTimeout(()=>{if(conn.open)return;if(att<2){olMsg('مفيش رد… بنعيد المحاولة ('+(att+2)+'/3)');p2pJoin(code,rejoin,att+1);return;}olMsg('مفيش رد من الغرفة. تأكد إن صاحبها فاتح الصفحة وشغّالة قدامه (مش في الخلفية)، وإنكم مش على نفس الموبايل في تابين.');if(rejoin)p2pRetry(code);},15000);
+  conn.on('open',()=>{clearTimeout(to);olTries=0;olMsg('');keepAwake();olSend(rejoin?{t:'rejoin',code,token:myToken}:{t:'join',code,...olProfile()});});
   conn.on('data',d=>{let m;try{m=typeof d==='string'?JSON.parse(d):d;}catch{return;}olHandle(m);});
   conn.on('close',()=>{if(!olLeaving&&conn===p2pConn)p2pRetry(code);});
   conn.on('error',()=>{});
@@ -1047,7 +1050,7 @@ function showLobby(){
  olEl('olConnect').classList.add('hidden');olEl('olLobby').classList.remove('hidden');olEl('olCodeShow').textContent=roomCode;
  olEl('olPlayers').innerHTML=olPlayers.map(p=>`<div class="ol-player${p.online?'':' off'}">${carSvg(p.color)}<b>${escapeHtml(p.name)}${p.seat===mySeat?' (أنت)':''}</b><small>${p.seat===hostSeat?'صاحب الغرفة':''}</small></div>`).join('');
  const host=mySeat===hostSeat;olEl('olStart').classList.toggle('hidden',!host);olEl('olStart').disabled=olPlayers.length<2;
- olEl('olStatus').textContent=host?(olPlayers.length<2?'ابعت الكود أو الرابط لأصحابك. محتاج لاعب واحد على الأقل.':`جاهزين؟ ${olPlayers.length} لاعبين في الغرفة.`):'في انتظار صاحب الغرفة يبدأ اللعب…';
+ olEl('olStatus').textContent=host?(olPlayers.length<2?'ابعت الكود أو الرابط لأصحابك. محتاج لاعب واحد على الأقل.':`جاهزين؟ ${olPlayers.length} لاعبين في الغرفة.`):'في انتظار صاحب الغرفة يبدأ اللعب…';if(p2pHostMode)olEl('olStatus').textContent+=' ⚠️ خليك في الصفحة دي طول اللعب، ومتبدّلش لتاب أو تطبيق تاني.';
 }
 function inviteLink(){const sv=(olEl('olServer').value||'').trim();if(sv)return sv.replace(/^ws/i,'http').replace(/^(https?:\/\/[^\/]+).*$/,'$1')+'/?room='+roomCode;return location.href.split(/[?#]/)[0]+'?room='+roomCode;}
 function olProfile(){const name=(olEl('olName').value||'').trim()||'لاعب';return {name,color:olColor};}
