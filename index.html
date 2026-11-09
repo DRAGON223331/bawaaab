@@ -484,7 +484,7 @@ select,input{background:#fbf4de;color:var(--ink);border:1px solid #b79a55;border
       <div id="olConnect">
         <label class="field-label" for="olName">اسمك</label><input id="olName" maxlength="20" placeholder="اكتب اسمك" autocomplete="off">
         <div class="field-label">اختار عربيتك</div><div class="car-choices" id="olCars"></div>
-        <div id="olServerRow" class="hidden"><label class="field-label" for="olServer">عنوان السيرفر</label><input id="olServer" dir="ltr" placeholder="https://your-game.onrender.com" autocomplete="off"></div>
+        <div id="olServerRow" class="hidden"><label class="field-label" for="olServer">سيرفر مخصص (اختياري — سيبه فاضي وهتلعبوا مباشرة)</label><input id="olServer" dir="ltr" placeholder="https://your-game.onrender.com" autocomplete="off"></div>
         <div class="ol-row"><button class="primary" id="olCreate" type="button" style="flex:1">إنشاء غرفة جديدة</button></div>
         <div class="ol-row"><input id="olCode" dir="ltr" maxlength="5" placeholder="كود الغرفة" autocomplete="off"><button class="gold-btn" id="olJoin" type="button">انضمام</button></div>
       </div>
@@ -534,6 +534,7 @@ select,input{background:#fbf4de;color:var(--ink);border:1px solid #b79a55;border
 
 <div class="modal-backdrop hidden" id="modalBackdrop"><div class="modal"><h3 id="modalTitle">طريقة اللعب</h3><div id="modalBody"></div><div class="modal-buttons" id="modalButtons"><button class="gold-btn" id="modalClose">حسنًا</button></div></div></div>
 <div class="toast" id="toast"></div>
+<script src="assets/vendor/peerjs.min.js"></script>
 <script>
 const COLORS=['#e94b4b','#388fda','#e6c13b','#55ad68','#9b68c9','#ed8b3a'];
 const CAR_PALETTE=[
@@ -944,10 +945,10 @@ const olEl=id=>document.getElementById(id);
 function olMsg(t){olEl('olMsg').textContent=t||'';}
 const STATIC_HOST=/(vercel\.app|netlify\.app|github\.io|pages\.dev)$/.test(location.hostname);
 function serverUrl(){let v=(olEl('olServer').value||'').trim();if(v){if(!/^(https?|wss?):\/\//i.test(v))v='https://'+v;return v.replace(/^http/i,'ws').replace(/^(wss?:\/\/[^\/]+).*$/,'$1');}if(location.protocol.startsWith('http')&&!STATIC_HOST)return (location.protocol==='https:'?'wss://':'ws://')+location.host;return '';}
-function olSend(m){if(ws&&ws.readyState===1)ws.send(JSON.stringify(m));}
+function olSend(m){if(p2pHostMode){Hub.handle(selfWs,m);return;}if(p2pConn){if(p2pConn.open)p2pConn.send(JSON.stringify(m));return;}if(ws&&ws.readyState===1)ws.send(JSON.stringify(m));}
 let olTries=0;
 function olConnect(onOpen,isRetry){
- const url=serverUrl();if(!url){olMsg('الصفحة دي مستضافة على موقع ثابت بدون سيرفر لعب. اكتب عنوان سيرفر Node شغّال (مثل Render) في خانة «عنوان السيرفر».');return;}
+ const url=serverUrl();if(!url){olMsg('اكتب عنوان السيرفر.');return;}
  try{ws=new WebSocket(url);}catch(e){olMsg('عنوان السيرفر غير صالح.');return;}
  olMsg('جاري الاتصال…');
  let opened=false;
@@ -961,7 +962,7 @@ function olConnect(onOpen,isRetry){
 }
 function olHandle(m){
  if(m.t==='error'){olMsg(m.msg);showToast(m.msg);if(m.fatal){try{sessionStorage.removeItem(OL_KEY);}catch(e){}roomCode='';myToken='';if(olStarted)setTimeout(()=>location.reload(),1500);}return;}
- if(m.t==='joined'){roomCode=m.code;mySeat=m.seat;myToken=m.token;hostSeat=m.host;olPlayers=m.players;try{sessionStorage.setItem(OL_KEY,JSON.stringify({code:roomCode,token:myToken,url:olEl('olServer').value||''}));}catch(e){}if(!m.rejoin||!olStarted)showLobby();return;}
+ if(m.t==='joined'){roomCode=m.code;mySeat=m.seat;myToken=m.token;hostSeat=m.host;olPlayers=m.players;if(!p2pHostMode){try{sessionStorage.setItem(OL_KEY,JSON.stringify({code:roomCode,token:myToken,url:olEl('olServer').value||'',mode:olMode()}));}catch(e){}}if(!m.rejoin||!olStarted)showLobby();return;}
  if(m.t==='lobby'){const prev=olPlayers;olPlayers=m.players;if(olStarted){m.players.forEach(p=>{const q=prev.find(x=>x.seat===p.seat);if(q&&q.online!==p.online)showToast(`${p.name} ${p.online?'رجع للعبة':'انقطع اتصاله'}`);});}else showLobby();return;}
  if(m.t==='start'){olStarted=true;olOrder=m.players;online=true;myId=olOrder.findIndex(p=>p.seat===mySeat);document.body.classList.add('online');closeModal();
   if(!m.resume&&myId===0){game=newState(olOrder.map(p=>p.name),olOrder.map(p=>p.color),-1);log('بدأت لعبة أونلاين. رصيد كل لاعب 1200 جنيه.');render();}
@@ -970,15 +971,87 @@ function olHandle(m){
  if(m.t==='state'){online=true;if(myId<0)myId=olOrder.findIndex(p=>p.seat===mySeat);applyRemote(m.state);return;}
  if(m.t==='chat'&&game){game.chat=game.chat||[];game.chat.push(m.entry);game.chat=game.chat.slice(-120);renderChat();return;}
 }
+const HUB_PALETTE=CAR_PALETTE.map(c=>c.hex);
+const Hub={room:null,
+ init(code){this.room={code,players:[],nextSeat:0,started:false,order:[],turn:undefined,state:null};},
+ pub(){return this.room.players.map(p=>({seat:p.seat,name:p.name,color:p.color,online:!!p.ws}));},
+ bcast(m,except){this.room.players.forEach(p=>{if(p.ws&&p.ws!==except)p.ws.send(m);});},
+ add(ws,name,color){const r=this.room,used=new Set(r.players.map(p=>p.color));const c=HUB_PALETTE.includes(color)&&!used.has(color)?color:HUB_PALETTE.find(x=>!used.has(x));const p={seat:r.nextSeat++,name:String(name||'').replace(/[<>]/g,'').trim().slice(0,20)||'لاعب',color:c,token:Math.random().toString(36).slice(2)+Date.now().toString(36),ws};r.players.push(p);ws.seat=p.seat;return p;},
+ joined(ws,p,extra){ws.send({t:'joined',code:this.room.code,seat:p.seat,token:p.token,host:0,players:this.pub(),...extra});},
+ handle(ws,m){
+  const r=this.room;if(!r||!m||m.t==='ping')return;
+  if(m.t==='create'){return this.joined(ws,this.add(ws,m.name,m.color));}
+  if(m.t==='join'){
+   if(r.started)return ws.send({t:'error',msg:'اللعبة بدأت بالفعل في هذه الغرفة.'});
+   if(r.players.length>=6)return ws.send({t:'error',msg:'الغرفة ممتلئة (٦ لاعبين).'});
+   this.joined(ws,this.add(ws,m.name,m.color));return this.bcast({t:'lobby',players:this.pub()},ws);}
+  if(m.t==='rejoin'){
+   const p=r.players.find(x=>x.token===m.token);if(!p)return ws.send({t:'error',msg:'تعذّر الرجوع للغرفة.',fatal:true});
+   p.ws=ws;ws.seat=p.seat;this.joined(ws,p,{rejoin:true});
+   if(r.started){ws.send({t:'start',players:r.order,resume:true});if(r.state)ws.send({t:'state',state:r.state});}
+   return this.bcast({t:'lobby',players:this.pub()},ws);}
+  if(m.t==='start'){
+   if(ws.seat!==r.players[0].seat||r.started)return;
+   if(r.players.length<2)return ws.send({t:'error',msg:'لازم لاعبين على الأقل.'});
+   r.started=true;r.order=this.pub();return this.bcast({t:'start',players:r.order});}
+  if(m.t==='state'){
+   if(!r.started||!m.state||!Array.isArray(m.state.players))return;
+   const idx=r.order.findIndex(p=>p.seat===ws.seat),owner=r.turn===undefined?0:r.turn;
+   if(idx!==owner)return;
+   r.turn=m.state.turn;r.state=m.state;return this.bcast({t:'state',state:m.state},ws);}
+  if(m.t==='chat'&&m.entry){
+   const e={kind:'message',playerId:r.order.findIndex(p=>p.seat===ws.seat),playerName:String(m.entry.playerName||'').slice(0,20),color:m.entry.color,text:String(m.entry.text||'').slice(0,240),time:m.entry.time||Date.now()};
+   return this.bcast({t:'chat',entry:e},ws);}
+ },
+ close(ws){const r=this.room;if(!r)return;const i=r.players.findIndex(p=>p.ws===ws);if(i<0)return;if(!r.started)r.players.splice(i,1);else r.players[i].ws=null;this.bcast({t:'lobby',players:this.pub()});}
+};
+
+/* ===== P2P transport: no server needed. The room owner's browser acts as the server (PeerJS / WebRTC). ===== */
+let peer=null,p2pConn=null,p2pHostMode=false,selfWs=null;
+function olMode(){return ((olEl('olServer').value||'').trim()||(location.protocol.startsWith('http')&&!STATIC_HOST))?'ws':'p2p';}
+function olBegin(kind,code){olLeaving=false;if(olMode()==='ws')return olConnect(()=>olSend(kind==='create'?{t:'create',...olProfile()}:{t:'join',code,...olProfile()}));if(typeof Peer==='undefined'){olMsg('مكتبة الاتصال المباشر لم تُحمَّل. حدّث الصفحة.');return;}kind==='create'?p2pHost(0):p2pJoin(code,false);}
+function p2pHost(tries){
+ const code=Array.from({length:4},()=>'ABCDEFGHJKMNPQRSTUVWXYZ'[Math.random()*23|0]).join('');
+ olMsg('جاري إنشاء الغرفة…');
+ if(peer){try{peer.destroy();}catch(e){}}
+ peer=new Peer('bankhaz-'+code);
+ peer.on('open',()=>{
+  p2pHostMode=true;selfWs={send:m=>{const c=JSON.parse(JSON.stringify(m));setTimeout(()=>olHandle(c),0);}};
+  Hub.init(code);Hub.handle(selfWs,{t:'create',...olProfile()});olMsg('');
+ });
+ peer.on('connection',c=>{
+  const g={send:m=>{if(c.open)c.send(JSON.stringify(m));}};
+  c.on('data',d=>{let m;try{m=typeof d==='string'?JSON.parse(d):d;}catch{return;}Hub.handle(g,m);});
+  c.on('close',()=>Hub.close(g));c.on('error',()=>{});
+ });
+ peer.on('error',e=>{if(e.type==='unavailable-id'&&tries<5){p2pHost(tries+1);}else if(!p2pHostMode)olMsg('تعذّر إنشاء الغرفة ('+e.type+'). تأكد من اتصال الإنترنت وجرّب تاني.');});
+ peer.on('disconnected',()=>{try{peer.reconnect();}catch(e){}});
+}
+function p2pRetry(code){if(roomCode&&myToken&&olTries++<8){showToast('انقطع الاتصال… بنحاول نرجّعك');clearTimeout(olRetry);olRetry=setTimeout(()=>p2pJoin(code,true),2500);}else showToast('انقطع الاتصال بصاحب الغرفة. لازم يفضل فاتح الصفحة. حدّث الصفحة وحاول تاني.');}
+function p2pJoin(code,rejoin){
+ olMsg(rejoin?'':'جاري الاتصال بالغرفة…');
+ if(peer){try{peer.destroy();}catch(e){}}p2pConn=null;
+ peer=new Peer();
+ peer.on('open',()=>{
+  const conn=peer.connect('bankhaz-'+code,{reliable:true});p2pConn=conn;
+  const to=setTimeout(()=>{if(!conn.open){olMsg('مفيش رد من الغرفة. راجع الكود وتأكد إن صاحبها فاتح الصفحة.');if(rejoin)p2pRetry(code);}},12000);
+  conn.on('open',()=>{clearTimeout(to);olTries=0;olMsg('');olSend(rejoin?{t:'rejoin',code,token:myToken}:{t:'join',code,...olProfile()});});
+  conn.on('data',d=>{let m;try{m=typeof d==='string'?JSON.parse(d):d;}catch{return;}olHandle(m);});
+  conn.on('close',()=>{if(!olLeaving&&conn===p2pConn)p2pRetry(code);});
+  conn.on('error',()=>{});
+ });
+ peer.on('error',e=>{if(e.type==='peer-unavailable'){if(rejoin){roomCode&&p2pRetry(code);}else olMsg('الغرفة غير موجودة. راجع الكود وتأكد إن صاحبها فاتح الصفحة.');}else if(!p2pConn||!p2pConn.open)olMsg('خطأ في الاتصال ('+e.type+').');});
+}
+
 function showLobby(){
  olEl('olConnect').classList.add('hidden');olEl('olLobby').classList.remove('hidden');olEl('olCodeShow').textContent=roomCode;
  olEl('olPlayers').innerHTML=olPlayers.map(p=>`<div class="ol-player${p.online?'':' off'}">${carSvg(p.color)}<b>${escapeHtml(p.name)}${p.seat===mySeat?' (أنت)':''}</b><small>${p.seat===hostSeat?'صاحب الغرفة':''}</small></div>`).join('');
  const host=mySeat===hostSeat;olEl('olStart').classList.toggle('hidden',!host);olEl('olStart').disabled=olPlayers.length<2;
  olEl('olStatus').textContent=host?(olPlayers.length<2?'ابعت الكود أو الرابط لأصحابك. محتاج لاعب واحد على الأقل.':`جاهزين؟ ${olPlayers.length} لاعبين في الغرفة.`):'في انتظار صاحب الغرفة يبدأ اللعب…';
 }
-function inviteLink(){const base=location.protocol.startsWith('http')?location.origin+'/':(olEl('olServer').value||'').trim().replace(/^ws/i,'http').replace(/\/+$/,'')+'/';return base+'?room='+roomCode;}
+function inviteLink(){const sv=(olEl('olServer').value||'').trim();if(sv)return sv.replace(/^ws/i,'http').replace(/^(https?:\/\/[^\/]+).*$/,'$1')+'/?room='+roomCode;return location.href.split(/[?#]/)[0]+'?room='+roomCode;}
 function olProfile(){const name=(olEl('olName').value||'').trim()||'لاعب';return {name,color:olColor};}
-function sendState(){if(ws&&ws.readyState===1&&game)ws.send(JSON.stringify({t:'state',state:game}));}
+function sendState(){if(game)olSend({t:'state',state:game});}
 function ringTile(i){try{const tile=document.querySelector(`[data-space="${i}"]`);if(!tile)return;const t=tile.getBoundingClientRect(),g=document.createElement('div');g.className='buy-ring';g.style.cssText=`left:${t.left+t.width/2}px;top:${t.top+t.height/2}px;width:${t.width*1.3}px;height:${t.height*1.3}px`;document.body.appendChild(g);setTimeout(()=>g.remove(),900);}catch(e){}}
 function tumbleDice(){let n=0;const f=['⚀','⚁','⚂','⚃','⚄','⚅'],iv=setInterval(()=>{if(++n>12)return clearInterval(iv);['boardDie1','boardDie2'].forEach(id=>{const d=document.getElementById(id);if(d)d.textContent=f[Math.random()*6|0];});},85);}
 function applyRemote(state){
@@ -1025,14 +1098,14 @@ const _saveGame=saveGame;saveGame=function(s){if(online)return;_saveGame(s);};
 olEl('olCars').innerHTML=CAR_PALETTE.map((c,i)=>`<button type="button" class="car-choice${i?'':' selected'}" data-c="${c.hex}">${carSvg(c.hex)}<span>${c.name}</span></button>`).join('');
 olEl('olCars').addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b)return;olColor=b.dataset.c;olEl('olCars').querySelectorAll('.car-choice').forEach(x=>x.classList.toggle('selected',x===b));});
 olEl('onlineBtn').addEventListener('click',()=>{olEl('onlinePanel').classList.toggle('hidden');});
-olEl('olCreate').addEventListener('click',()=>olConnect(()=>olSend({t:'create',...olProfile()})));
-olEl('olJoin').addEventListener('click',()=>{const code=(olEl('olCode').value||'').trim().toUpperCase();if(code.length<4){olMsg('اكتب كود الغرفة (٤ حروف).');return;}olConnect(()=>olSend({t:'join',code,...olProfile()}));});
+olEl('olCreate').addEventListener('click',()=>olBegin('create'));
+olEl('olJoin').addEventListener('click',()=>{const code=(olEl('olCode').value||'').trim().toUpperCase();if(code.length<4){olMsg('اكتب كود الغرفة (٤ حروف).');return;}olBegin('join',code);});
 olEl('olStart').addEventListener('click',()=>olSend({t:'start'}));
 olEl('olCopy').addEventListener('click',()=>{const l=inviteLink();(navigator.clipboard?navigator.clipboard.writeText(l):Promise.reject()).then(()=>showToast('تم نسخ رابط الدعوة'),()=>prompt('انسخ الرابط:',l));});
-olEl('olLeave').addEventListener('click',()=>{olLeaving=true;try{sessionStorage.removeItem(OL_KEY);}catch(e){}if(ws)ws.close();location.href=location.pathname;});
+olEl('olLeave').addEventListener('click',()=>{olLeaving=true;try{sessionStorage.removeItem(OL_KEY);}catch(e){}if(ws)ws.close();if(peer){try{peer.destroy();}catch(e){}}location.href=location.pathname;});
 olEl('olServerRow').classList.toggle('hidden',!(location.protocol==='file:'||STATIC_HOST));
 (function(){const q=new URLSearchParams(location.search).get('room');if(q){olEl('onlinePanel').classList.remove('hidden');olEl('olCode').value=q.toUpperCase();}
- try{const s=JSON.parse(sessionStorage.getItem(OL_KEY)||'null');if(s&&s.code){roomCode=s.code;myToken=s.token;if(s.url)olEl('olServer').value=s.url;olEl('onlinePanel').classList.remove('hidden');olConnect(()=>olSend({t:'rejoin',code:s.code,token:s.token}));}}catch(e){}})();
+ try{const s=JSON.parse(sessionStorage.getItem(OL_KEY)||'null');if(s&&s.code){roomCode=s.code;myToken=s.token;if(s.url)olEl('olServer').value=s.url;olEl('onlinePanel').classList.remove('hidden');if(s.mode==='p2p'&&typeof Peer!=='undefined')p2pJoin(s.code,true);else olConnect(()=>olSend({t:'rejoin',code:s.code,token:s.token}));}}catch(e){}})();
 
 /* tap a tile for its details (helps on phones where text is small) */
 document.getElementById('boardGrid').addEventListener('click',e=>{

@@ -2,7 +2,7 @@
 const http = require('http'), fs = require('fs'), path = require('path');
 const { WebSocketServer } = require('ws');
 const ROOT = __dirname, PORT = process.env.PORT || 3000;
-const MAIN = 'بنك_الحظ.html';
+const MAIN = 'index.html';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.mp3': 'audio/mpeg', '.webp': 'image/webp', '.png': 'image/png', '.js': 'text/javascript', '.css': 'text/css', '.txt': 'text/plain; charset=utf-8' };
 const PALETTE = ['#e94b4b', '#388fda', '#e6c13b', '#55ad68', '#9b68c9', '#ed8b3a'];
 
